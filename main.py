@@ -5,18 +5,29 @@ Created on Mon Jan 19 17:33:36 2015
 @author: rafik
 """
 
+import sys
 import csv
 import requests as rq
-import cStringIO
+from StringIO import StringIO
+from PIL import Image
 
-import os.path
-import shutil
+from os.path import join, isfile, isdir, islink, split, splitext
+from os import symlink, makedirs
+from glob import glob
 
-import requests
+
+#
+# the setup
+###############################################################################
 
 outdir = 'output'
-allresultscsv = 'output/all_results.csv'
+imgdirname = 'full_imgs'
+imgdir = join(outdir, imgdirname)
+thumbdirname = 'thumb_imgs'
+thumbdir = join(outdir, thumbdirname)
+allresultscsv = join(outdir, 'all_results.csv')
 claudecsv = 'sw_interesting _objects.csv'
+
 
 #
 # the datastructure
@@ -62,8 +73,9 @@ def fetchSLresults():
     
     write the fetched to a csv file
     '''
+
+    print "\nFETCH SL RESULTS:\n"
     
-    outfile = allresultscsv 
     slurl = 'http://mite.physik.uzh.ch/tools/ResultDataTable'
     startid = 115 # because the former are rubbish   
     maxid = 15000 #15000 #currently: 13220
@@ -71,13 +83,17 @@ def fetchSLresults():
     step = 100 # get somany at a time
     
     first = True
+    
+    if not isdir(outdir):
+        makedirs(outdir)
 
-    with open(outfile, 'wb') as f:
+    with open(allresultscsv, 'wb') as f:
         writer = csv.writer(f)
     
         for i in range(startid, maxid, step):
     
             print 'working on: %05i - %05i' % (i, i+step-1),
+            sys.stdout.flush()
         
             data = '?'+'&'.join([
                 "%s-%s" % (i, i+step),
@@ -91,9 +107,10 @@ def fetchSLresults():
                 print 'skipping'
                 continue
             print 'got it!',
+            sys.stdout.flush()
     
             rows = []    
-            filelike = cStringIO.StringIO(rsp.text)
+            filelike = StringIO(rsp.text)
             csvr = csv.reader(filelike)
             header = csvr.next() # get rid of header
 
@@ -107,7 +124,8 @@ def fetchSLresults():
 
             writer.writerows(rows)
             print 'wrote it!'
-    return outfile                        
+            
+    return
 
 
 #
@@ -141,11 +159,13 @@ def populateTree(path, loc):
 # create the datastructures
 ###############################################################################
 
-def readClaudesList(fname=claudecsv):
+def readClaudesList():
+
+    print "\nPARSE CLAUDES LIST:\n"
     
     lenses = []
 
-    with open(fname, 'rb') as csvfile:
+    with open(claudecsv, 'rb') as csvfile:
         csvr = csv.reader(csvfile)
         for row in csvr:
             if row[0].startswith("ASW"):
@@ -163,6 +183,8 @@ def dictSLresults():
     idea behind the mess: None; reason:
     lens to be modeled, and a modelling result
     '''
+    
+    print "\nPARSE SL LIST:\n"
 
     with open(allresultscsv, 'rb') as csvfile:
         csvr = csv.reader(csvfile)
@@ -198,7 +220,7 @@ def dictSLresults():
 
     for modelid in D.modelID_2_lensID.keys():
         root, path = getRoot(modelid,[])
-        print root, path
+        #print root, path
         populateTree(path, D.resultTree)
 
 #
@@ -209,12 +231,14 @@ def mergeLists():
     # get data ready
 #    readClaudesList()
 #    dictSLresults()
+
+    print "\nCREATE DICTS:\n"
     
     for name in D.candidatesNames:
         try:
             idd = D.lensName_2_lensID[name]
         except KeyError:
-            print "no key for",name
+            #print "no key for",name
             D.cldList[name] = None
             D.cldTree[name] = None
             D.cldNoModels.append(name)
@@ -237,29 +261,75 @@ def mergeLists():
 # AND HERE COMES THE GFX STUFF
 ###############################################################################
 
-def getModels():
-    '''
-    http://mite.physik.uzh.ch/result/012402/input.png
-    http://mite.physik.uzh.ch/result/012402/img3_ipol.png
-    http://mite.physik.uzh.ch/result/012402/img1.png
-    http://mite.physik.uzh.ch/result/012402/img2.png
-    http://spacewarps.org/subjects/standard/5183f151e4bb2102190561ab.png
-    '''
+def getModelImgs():
+
+    print "\nGET MODEL IMAGES FROM SL:\n"
+    
+    if not isdir(imgdir):
+        makedirs(imgdir)
     
     # get all the results
     for mid in D.cldFlatList:
-        for img in ['input.png', 'img3_ipol.png', 'img1.png', 'img2.png']:
+        for img in ['input.png', 'img3_ipol.png', 'img3.png', 'img1.png', 'img2.png']:
             print 'getting', mid, img,
+            sys.stdout.flush()
             url = 'http://mite.physik.uzh.ch/result/' + '%06i/' % mid + img
-            path = os.path.join(outdir, "%06i_%s" % (mid, img))
-            r = requests.get(url, stream=True)
-            if r.status_code == 200:
-                with open(path, 'wb') as f:
-                    for chunk in r.iter_content(1024*4):
-                        f.write(chunk)
-                print 'done'
-            else:
-                print 'ERROR'
+            path = join(imgdir, "%06i_%s" % (mid, img))
+
+            if isfile(path):
+                print 'SKIPPING (already present)'
+                continue
+
+            r = rq.get(url, stream=True)
+            
+            if r.status_code >= 300: # reuqests takes care of redirects!
+                print 'ERROR:', r.status_code
+                continue
+
+            if 'content-type' in r.headers and 'json' in r.headers['content-type']:
+                print 'ERROR: no valid png file (json)' 
+                continue
+
+            with open(path, 'w') as f:
+                for chunk in r.iter_content(1024*4):
+                    f.write(chunk)
+            print 'done'
+
+#            r = rq.get(url)
+#            if r.status_code == 200:
+#                i = Image.open(StringIO(r.content))
+#                i.save(path)
+#                del i
+#                print 'done'
+#            else:
+#                print 'ERROR'
+
+def makeThumbs():
+    
+    newSize = (256,256)
+    
+    print "\nCREATING THUMBNAILS:\n"
+
+    if not isdir(thumbdir):
+        makedirs(thumbdir)
+    
+    for imgpath in glob(join(imgdir, '*.png')):
+        dirr, orgFName = split(imgpath)
+        orgName, ext = splitext(orgFName)
+        thumbFName = orgName + '' + ext
+        thumbPath = join(thumbdir, thumbFName)
+        print 'working on:', orgFName,
+        sys.stdout.flush()
+        
+        if isfile(thumbPath):
+            print "SKIPPING (already present)"
+            continue
+        with open(imgpath) as f:
+            img = Image.open(f)
+            img.thumbnail(newSize, Image.ANTIALIAS)
+            img.save(thumbPath)
+        print 'done'
+        
                 
 def printTree():
     
@@ -273,19 +343,166 @@ def printTree():
         print '\n'+k
         prT(v, 0)
                         
+
+
+
+def createHTMLTree():
+
+    print "\nCREATING HTMLTREE:\n"
     
+    html = [
+        '<!DOCTYPE HTML>',
+        '<html>',
+        '<head>',
+        '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />',
+        '<title>Your Website</title>',
+
+        '<link href="css/jquery.treetable.css" rel="stylesheet" type="text/css" />',
+        '<link href="css/jquery.treetable.theme.default.css" rel="stylesheet" type="text/css" />',
+        '<link href="css/lightbox.css" rel="stylesheet" />',
+        '<link href="css/screen.css" rel="stylesheet" type="text/css" />',
+
+        '<script src="js/jquery-1.11.2.min.js"></script>',
+        '<script src="js/jquery.treetable.js"></script>',
+        '<script src="js/lightbox.min.js"></script>',
+        '<style type="text/css">'
+        ]
+        
+    for lvl in range(10):
+        color = [
+            '#',
+            '%02x' % (255-lvl*25),
+            '%02x' % (255-lvl*25),
+            '%02x' % (255-lvl*25)
+            ]
+        html.append(
+            '.lvl%i { background-color: %s; }' % (lvl, ''.join(color))
+        )
+        
+    html.extend([
+        '</style>'
+        '</head>',
+
+        '<body>',
+        '<h1>HTMLTree</h1>',
+    ])
+    
+    def getImgTag(mid, fname, asw):
+        tag = [
+            '<a',
+            'href="%s/%06i_%s"' % (imgdirname, mid, fname),
+            'data-lightbox="%s"' % asw,
+            'data-title="Model: %06i (%s)"' % (mid, asw),
+            '>',
+            '',
+            '<img',
+            'src="%s/%06i_%s"' % (thumbdirname, mid, fname),
+            'style="height:200px"',
+            '>',
+            '</a>'
+
+        ]        
+        return ' '.join(tag)
+    
+    def prT(tree, lvl, html, parent, asw):
+        if not tree: return
+        for k, v in tree.items():
+            if not parent:
+                phtml = ''
+            else:
+                phtml = ' data-tt-parent-id="%06i"' % parent
+            idhtml = 'data-tt-id="%06i"' % k
+            tr = [
+                '<tr %s %s class="lvl%i">' % (phtml, idhtml, lvl),
+                '  <td>',
+                '    <span class="mod_name">%06i</span>' % k,
+                '    <span class="mod_detail">pxrad: %i<br />usr: %s</span>' % (int(D.models[k]['pixrad']), D.models[k]['user']),
+                '  </td>',
+                '  <td>%s</td>' % getImgTag(k, 'input.png', asw),
+                '  <td>%s</td>' % getImgTag(k, 'img1.png', asw),
+                '  <td>%s</td>' % getImgTag(k, 'img2.png', asw),
+            ]
+#            print isfile(join(thumbdir, '%06i_img3_ipol.png'%k)), join(thumbdir, '%06i_img3_ipol.png'%k)
+            if isfile(join(thumbdir, '%06i_img3_ipol.png'%k)):
+                tr.append('  <td>%s</td>' % getImgTag(k, 'img3_ipol.png', asw))
+            else:
+                tr.append('  <td>%s</td>' % getImgTag(k, 'img3.png', asw))
+            tr.append('</tr>')
+            
+            html.append('\n'.join(tr))
+            prT(v, lvl+1, html, k, asw)
+    
+    for k, v in D.cldTree.items():
+        html.extend([
+            '<h2>'+k+'</h2>',
+            '<table id="%s" class="treetable">' % k
+            ])
+        prT(v, 0, html, None,k)
+        html.extend([
+            '</table>',
+            '<script>',
+            '$(".treetable").treetable("expandAll");',
+            '</script>',
+        ])
+
+    html.extend([
+        '<script>',
+        '$("#%s").treetable();',
+        '</script>',
+        '</body>',
+        '</html>'
+    ])
+    with open(join(outdir, 'tree.html'), 'w') as f:
+        f.write('\n'.join(html))
+        
+    # link assets
+    lst = [ split(_1)+(_2,) for _1,_2 in [split(_) for _ in glob('assets/*/*')]]
+    for rt, dr, fn in lst:
+        if not isdir(join(outdir, dr)):
+            makedirs(join(outdir, dr))
+        if not isfile(join(outdir, dr, fn)) and not islink(join(outdir, dr, fn)):
+            symlink(join('..', '..', rt, dr, fn), join(outdir, dr, fn))
+
+
+#    if not isdir(join(outdir, 'js')):
+#        copytree('assets/js', join(outdir, 'js'))
+#    if not isdir(join(outdir, 'css')):
+#        copytree('assets/css', join(outdir, 'css'))
+#
+#
+#    for p in [_.split(os.sep) for _ in glob('assets/*/*.*')]:
+#        dr, fn = p[-2], p[-1]
+#        ndr = join(outdir, dr)
+#        makedirs(ndr)
+#        
+#    glob('assets/*/*.*')
+#    
+#    for _, dr in map(os.path.split, glob('assets/*')):
+#        copytree(join(_, dr), join(outdir, dr))
+#    
+#    for p in [join(outdir, 'js'), join(outdir, 'css')]:
+#        makedirs(p)
+#    
+#    symlink('assets/js', join(outdir, 'js'))
+#    symlink('assets/css', join(outdir, 'css'))
+
 
 #
 # AND THE END
 ###############################################################################
 
 def main():
-    if not os.path.isfile(allresultscsv):
+    if not isfile(allresultscsv):
         fetchSLresults()
-
+        
     dictSLresults()
     readClaudesList()
     mergeLists()
+
+    getModelImgs()
+    makeThumbs()
+    
+    createHTMLTree()
 
    
 if __name__ == "__main__":
