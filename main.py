@@ -10,9 +10,11 @@ import requests as rq
 import cStringIO
 
 import os.path
+import shutil
 
+import requests
 
-
+outdir = 'output'
 allresultscsv = 'output/all_results.csv'
 claudecsv = 'sw_interesting _objects.csv'
 
@@ -224,17 +226,54 @@ def mergeLists():
         for mid in mids:
             if mid in D.resultTree.keys():
                 rtree[mid] = D.resultTree[mid]
+            if not mid in D.cldFlatList:
+                D.cldFlatList.append(mid)
         
         D.cldList[name] = mids
         D.cldTree[name] = rtree
+    D.cldFlatList.sort()
 
 #
 # AND HERE COMES THE GFX STUFF
 ###############################################################################
 
-
-
-
+def getModels():
+    '''
+    http://mite.physik.uzh.ch/result/012402/input.png
+    http://mite.physik.uzh.ch/result/012402/img3_ipol.png
+    http://mite.physik.uzh.ch/result/012402/img1.png
+    http://mite.physik.uzh.ch/result/012402/img2.png
+    http://spacewarps.org/subjects/standard/5183f151e4bb2102190561ab.png
+    '''
+    
+    # get all the results
+    for mid in D.cldFlatList:
+        for img in ['input.png', 'img3_ipol.png', 'img1.png', 'img2.png']:
+            print 'getting', mid, img,
+            url = 'http://mite.physik.uzh.ch/result/' + '%06i/' % mid + img
+            path = os.path.join(outdir, "%06i_%s" % (mid, img))
+            r = requests.get(url, stream=True)
+            if r.status_code == 200:
+                with open(path, 'wb') as f:
+                    for chunk in r.iter_content(1024*4):
+                        f.write(chunk)
+                print 'done'
+            else:
+                print 'ERROR'
+                
+def printTree():
+    
+    def prT(tree, lvl=0):
+        if not tree: return
+        for k, v in tree.items():
+            print "  "+"| "*lvl + "|-- " + '%05i '%k + '[pxR: %02i; usr: %s]' % (int(D.models[k]['pixrad']), D.models[k]['user'])
+            prT(v, lvl+1)
+    
+    for k, v in D.cldTree.items():
+        print '\n'+k
+        prT(v, 0)
+                        
+    
 
 #
 # AND THE END
