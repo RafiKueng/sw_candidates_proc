@@ -6,10 +6,12 @@ Created on Mon Jan 19 17:33:36 2015
 """
 
 import sys
+import re
 import csv
 import requests as rq
 from StringIO import StringIO
 from PIL import Image
+import json as JSON
 
 from os.path import join, isfile, isdir, islink, split, splitext
 from os import symlink, makedirs
@@ -29,6 +31,11 @@ allresultscsv = join(outdir, 'all_results.csv')
 claudecsv = 'sw_interesting _objects.csv'
 
 
+lensdatadirname = 'lensdata'
+lensdatadir = join(outdir, lensdatadirname)
+#lensdatacsv = join('lensdata.csv')
+
+
 #
 # the datastructure
 ###############################################################################
@@ -45,7 +52,9 @@ class D(object):
     modelID_2_lensID = {}
     modelID_2_lensName = {}
     lensID_2_modelIDs = {}
+    
     models = {}     # models[23]['datasource'] all the data from SL!
+    lenses = {}
     
     getModels = {}  # ASWname -> models (same as lensID2modelIDs, but with name instead of id)
     getParent = {}  # for each model get it's parent or none
@@ -160,6 +169,7 @@ def populateTree(path, loc):
 ###############################################################################
 
 def readClaudesList():
+    ''' run after dictSLresults'''
 
     print "\nPARSE CLAUDES LIST:\n"
     
@@ -172,7 +182,32 @@ def readClaudesList():
                 lenses.append(row[0])
 
     D.candidatesNames = lenses
+    
+    for lensname in D.candidatesNames:
+        print lensname
+        if not lensname in D.lenses.keys():
+            
+            data = {
+                'action':'datasourceApi',
+                'src_id':3,
+                'do':'createObj',
+                'data[]': lensname
+                }
+            resp = rq.post('http://mite.physik.uzh.ch/api', data=data)
+            try:
+                json = resp.json()
+            except:
+                print 'error'
+                continue
+            #print json, resp.text, resp.status_code
+            lensid = json[0]
+            D.lenses[lensname] = {'id': lensid}
 
+            D.lensName_2_lensID[lensname] = lensid
+            D.lensID_2_lensName[lensid] = lensname
+
+            if not D.lensID_2_modelIDs.has_key(lensid):
+                D.lensID_2_modelIDs[lensid] = []
 
 
 def dictSLresults():
@@ -214,7 +249,21 @@ def dictSLresults():
             else:
                 D.getParent[modelid] = None
                 
+            D.lenses[lensname] = {'id': lensid}
+                
     
+
+#
+# AND FINALLY DATA PROCESSING
+###############################################################################
+
+def processLists():
+    # get data ready
+#    readClaudesList()
+#    dictSLresults()
+
+    print "\nCREATE DICTS:\n"
+
     for key, val in D.lensID_2_modelIDs.items():
         D.getModels[D.lensID_2_lensName[key]] = val
 
@@ -223,16 +272,6 @@ def dictSLresults():
         #print root, path
         populateTree(path, D.resultTree)
 
-#
-# AND FINALLY DATA PROCESSING
-###############################################################################
-
-def mergeLists():
-    # get data ready
-#    readClaudesList()
-#    dictSLresults()
-
-    print "\nCREATE DICTS:\n"
     
     for name in D.candidatesNames:
         try:
@@ -304,6 +343,127 @@ def getModelImgs():
 #            else:
 #                print 'ERROR'
 
+
+def getLensJSONData():
+
+    print "\nGET LENS DATA FROM SW:\n"
+
+    ln = len(D.lenses.keys())
+    
+    if not isdir(lensdatadir):
+        makedirs(lensdatadir)
+    
+    for i, lensname in enumerate(D.lenses.keys()):
+        fn = join(lensdatadir, "%s.json"%lensname)
+        print "getting data for lens", lensname, '(%3i / %3i)' % (i, ln),
+
+        if isfile(fn):
+            print 'file present!'
+#            with open(fn) as jsonf:
+#                json = JSON.loads(jsonf.read())
+        else:
+            print "getting online",
+            try:
+                resp = rq.get("https://api.zooniverse.org/projects/spacewarp/talk/subjects/"+lensname)
+                if resp.status_code >= 400 or len(resp.text) ==0:
+                    raise ValueError
+                json = resp.json()
+                print 'ok',
+            except:
+                print 'error',
+                json = {}
+            
+            with open(fn, 'w') as jsonf:
+                jsonf.write(JSON.dumps(json))
+                print 'written',
+                
+        # do something with data? no do in loadJSON..
+
+
+def loadLensJSONData():
+
+    print "\nLOAD LENS DATA FROM FILE:\n"
+
+    ln = len(D.lenses.keys())
+    
+    for i, lensname in enumerate(D.lenses.keys()):
+        fn = join(lensdatadir, "%s.json"%lensname)
+        print "parsing data for lens", lensname, '(%3i / %3i)' % (i, ln),
+
+        with open(fn) as jsonf:
+            json = JSON.loads(jsonf.read())
+
+            url = json.get('location',{}).get('standard',"")
+            tags = json.get('tags', {})
+            comments = json.get('discussion',{}).get('comments',[])
+        
+            tagsstr = ";".join(['{_id},{count}'.format(**_) for _ in tags])
+    
+            D.lenses[lensname]['url'] = url
+            D.lenses[lensname]['tags'] = tags
+            D.lenses[lensname]['tagstr'] = tagsstr
+            D.lenses[lensname]['comments'] = comments
+            
+        print "done"
+
+
+
+#def getLensImgs():
+#
+#    print "\nGET LENS DATA FROM SW:\n"
+#
+#    if isfile(lensdatacsv):
+#        try:
+#            print "lensdatacsv already present, skipping and reading from file"
+#            with open(lensdatacsv, 'rb') as csvfile:
+#                csvr = csv.reader(csvfile)
+#                for row in csvr:
+#                    if len(row[2])>0:
+#                        tags = dict({tuple(_.split(',')) for _ in row[2].split(';')})
+#                    else:
+#                        tags = {}
+#                    D.lenses[row[0]]['url']=row[1]
+#                    D.lenses[row[0]]['tags'] = tags
+#                    D.lenses[row[0]]['tagstr'] = row[2]
+#            return
+#        except IndexError:
+#            print "Some key not found, refetching all the data"
+#            pass
+#
+#
+#    with open(lensdatacsv, 'wb') as csvfile:
+#        csvr = csv.writer(csvfile)
+#
+#        ln = len(D.lenses.keys())
+#        for i, lensname in enumerate(D.lenses.keys()):
+#            print "getting url for", lensname, '(%3i / %3i)' % (i, ln),
+#            try:
+#                resp = rq.get("https://api.zooniverse.org/projects/spacewarp/talk/subjects/"+lensname)
+#                if resp.status_code >= 400 or len(resp.text) ==0:
+#                    raise ValueError
+#                json = resp.json()
+#                url = json['location']['standard']
+#                tags = json['tags']
+#            except:
+#                print "!! ERROR !!",
+#                json = {}
+#                url = ""
+#                tags = {}
+#
+#            tagsstr = ";".join(['{_id},{count}'.format(**_) for _ in tags])
+#            if len(tagsstr) > 0:
+#                tags = dict({tuple(_.split(',')) for _ in tagsstr.split(';')})
+#            else: tags = {}
+# 
+#            D.lenses[lensname]['json'] = json
+#            D.lenses[lensname]['url'] = url
+#            D.lenses[lensname]['tags'] = tags
+#            D.lenses[lensname]['tagstr'] = tagsstr
+#            
+#            csvr.writerow([lensname, url, tagsstr])
+#            print "Done"
+
+
 def makeThumbs():
     
     newSize = (256,256)
@@ -361,6 +521,7 @@ def createHTMLTree():
         '<link href="css/jquery.treetable.theme.default.css" rel="stylesheet" type="text/css" />',
         '<link href="css/lightbox.css" rel="stylesheet" />',
         '<link href="css/screen.css" rel="stylesheet" type="text/css" />',
+        '<link href="http://fonts.googleapis.com/css?family=Inconsolata:400,700" rel="stylesheet" type="text/css" />',
 
         '<script src="js/jquery-1.11.2.min.js"></script>',
         '<script src="js/jquery.treetable.js"></script>',
@@ -403,6 +564,38 @@ def createHTMLTree():
 
         ]        
         return ' '.join(tag)
+        
+
+    def getTags(asw):
+        tags = D.lenses[asw]["tags"]
+        html = '<span class="tags">tags: '
+        for t in tags:
+            html += '<span>%s (%i)</span>' % (t['_id'], t['count'])
+        html += '</span>'
+        return html
+
+
+    def getComments(asw):
+        comments = D.lenses[asw]["comments"]
+        html = [
+            '<span id="box">',
+            '<a href="#"> Comments',
+            '<span class="childrens">'
+            ]
+        for c in comments:
+            body = re.sub(r'[^\x00-\x7F]+',' ', c['body'])
+            usern = re.sub(r'[^\x00-\x7F]+',' ', c['user_name'])
+            html.append(
+            '<b>%s:</b><br />%s<br />' % (usern, body)
+            )
+        html.extend([
+            '</span>',
+            '</a>',
+            '</span>'
+            ])
+        
+        return '\n'.join(html)
+        
     
     def prT(tree, lvl, html, parent, asw):
         if not tree: return
@@ -432,9 +625,36 @@ def createHTMLTree():
             html.append('\n'.join(tr))
             prT(v, lvl+1, html, k, asw)
     
-    for k, v in D.cldTree.items():
+    ln = len(D.cldTree.keys())
+    for i, itm in enumerate(sorted(D.cldTree.items())):
+        k, v = itm
+        #print getComments(k)
+        try:
+            url = D.lenses[k]['url']
+        except KeyError:
+            url = ""
+        if url and len(url)>0:
+            a  = '<a href="%s" data-lightbox="%s" data-title="Lens: %s">' % (url, k, k)
+            a += k[:-4] + '<span class="subid">%s</span>' % k[-4:]
+            a += '</a>'
+        else:
+            a = k[:-4] + '<span class="subid">%s</span>' % k[-4:]
         html.extend([
-            '<h2>'+k+'</h2>',
+            '<h2>',
+            a,
+            '</h2>',
+            '<p class="lensinfo">',
+            '(%3i/%3i)' % (i+1, ln),
+            '</p>'
+            '<p class="lensinfo">',
+            '<a href="http://talk.spacewarps.org/#/subjects/%s">SW</a>' % k,
+            '</p>',
+            '<p class="lensinfo">',
+            getComments(k),
+            '</p>',
+            '<p class="lensinfo">',
+            getTags(k),
+            '</p>',
             '<table id="%s" class="treetable">' % k
             ])
         prT(v, 0, html, None,k)
@@ -497,9 +717,12 @@ def main():
         
     dictSLresults()
     readClaudesList()
-    mergeLists()
+    processLists()
 
     getModelImgs()
+#    getLensImgs()
+    getLensJSONData()
+    loadLensJSONData()
     makeThumbs()
     
     createHTMLTree()

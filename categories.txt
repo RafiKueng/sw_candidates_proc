@@ -1,0 +1,22 @@
+Convincing
+  when the model looks like a pretty good fit to the lens -- leaving little doubt that it is a lens.
+Plausible
+  if the model looks like it's on the right track, but needs improvement.
+MayBe
+  if not so convided that lens
+Uncertain
+  when the modelling was unsuccessful, or doesn't look right. (Not a lens?)
+RatherNot
+  quite sure its no lens
+Complicated
+  when the system does look like a lens, but the modelling software has difficulties with it.
+Strange
+  for example red arc
+NoModels
+  no models available
+?
+  ask ps
+  
+  
+html/css to embed in page
+http://jsfiddle.net/618m2ayb/
